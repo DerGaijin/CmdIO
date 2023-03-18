@@ -9,9 +9,12 @@
 
 namespace DerGaijin
 {
-	std::atomic<bool> Console::m_InputEnabled = false;
+	std::mutex Console::m_IOMutex;
+	size_t Console::m_Column = 0;
+	std::wstreambuf* Console::m_WCoutStreamBuf = nullptr;
+	std::streambuf* Console::m_CoutStreamBuf = nullptr;
+	std::atomic<bool> Console::m_InputEnabled;
 	std::thread Console::m_InputThread;
-	std::mutex Console::m_InputMutex;
 	std::wstring Console::m_InputPrefix;
 	std::wstring Console::m_Input;
 	size_t Console::m_CursorPos = 0;
@@ -19,21 +22,58 @@ namespace DerGaijin
 	std::queue<std::wstring> Console::m_InputQueue;
 	std::condition_variable Console::m_InputNotifier;
 
+	template<typename Char>
+	class ConsoleRedirect : public std::basic_streambuf<Char>
+	{
+	protected:
+		virtual std::streamsize xsputn(typename std::basic_streambuf<Char>::char_type const* s, std::streamsize count) override
+		{
+			Console::Output(std::basic_string<Char>(s, count));
+			return count;
+		}
+
+		virtual typename std::basic_streambuf<Char>::int_type overflow(typename std::basic_streambuf<Char>::int_type C) override
+		{
+			Console::Output(std::basic_string<Char>((Char*)&C, 1));
+			return 0;
+		}
+	};
+	ConsoleRedirect<wchar_t> WCoutRedirect;
+	ConsoleRedirect<char> CoutRedirect;
 
 	void Console::Output(const std::wstring& Str)
 	{
-		std::lock_guard<std::mutex> Lock(m_InputMutex);
+		if (Str.size() == 0)
+		{
+			return;
+		}
 
-		std::wstring OutputStr;
-		OutputStr.reserve(Str.size() + m_InputPrefix.size() + m_Input.size());
-		GetClearInputPreview(OutputStr);
-		OutputStr += Str;
-		OutputStr += L"\n";
+		std::lock_guard<std::mutex> Lock(m_IOMutex);
+
+		std::wstring Result;
+
 		if (m_InputEnabled)
 		{
-			GetInputPreview(OutputStr);
+			AddInputRemove(Result);
 		}
-		std::wcout << OutputStr;
+
+		Result.reserve(Result.size() + Str.size());
+		for (auto& C : Str)
+		{
+			Result += C;
+			m_Column++;
+			if (C == '\n' || C == '\r')
+			{
+				m_Column = 0;
+			}
+		}
+
+		if (m_InputEnabled)
+		{
+			AddInputPreview(Result);
+		}
+
+		Write(Result);
 	}
 
 	void Console::Output(const std::string& Str)
@@ -46,55 +86,19 @@ namespace DerGaijin
 		bool Expected = false;
 		if (m_InputEnabled.compare_exchange_weak(Expected, true))
 		{
-			m_InputThread = std::thread(&Console::InputThreadFunc);
+			m_InputThread = std::thread(&Console::InputThread);
+
+			m_WCoutStreamBuf = std::wcout.rdbuf();
+			m_CoutStreamBuf = std::cout.rdbuf();
+
+			std::wcout.rdbuf(&WCoutRedirect);
+			std::cout.rdbuf(&CoutRedirect);
+
+			std::lock_guard<std::mutex> Lock(m_IOMutex);
+			std::wstring InputPreview;
+			AddInputPreview(InputPreview);
+			Write(InputPreview);
 		}
-	}
-
-	void Console::SetInputPrefix(const std::wstring& Prefix)
-	{
-		std::lock_guard<std::mutex> Lock(m_InputMutex);
-		std::wstring InputPreviewUpdate;
-		GetClearInputPreview(InputPreviewUpdate);
-		m_InputPrefix = Prefix;
-		GetInputPreview(InputPreviewUpdate);
-		std::wcout << InputPreviewUpdate;
-	}
-
-	void Console::SetInputPrefix(const std::string& Prefix)
-	{
-		SetInputPrefix(std::wstring(Prefix.begin(), Prefix.end()));
-	}
-
-	std::wstring Console::GetInputPrefix()
-	{
-		std::lock_guard<std::mutex> Lock(m_InputMutex);
-		return m_InputPrefix;
-	}
-
-	bool Console::HasInput()
-	{
-		std::lock_guard<std::mutex> Lock(m_InputMutex);
-		return !m_InputQueue.empty();
-	}
-
-	std::wstring Console::Input()
-	{
-		std::lock_guard<std::mutex> Lock(m_InputMutex);
-		std::wstring Input = m_InputQueue.front();
-		m_InputQueue.pop();
-		return Input;
-	}
-
-	bool Console::WaitInput()
-	{
-		if (m_InputEnabled)
-		{
-			std::unique_lock<std::mutex> Lock(m_InputMutex);
-			m_InputNotifier.wait(Lock, [&]() -> bool { return !m_InputQueue.empty() || !m_InputEnabled.load(); });
-			return m_InputEnabled;
-		}
-
-		return false;
 	}
 
 	void Console::DisableInput()
@@ -106,18 +110,81 @@ namespace DerGaijin
 			{
 				m_InputThread.join();
 			}
-			{
-				std::lock_guard<std::mutex> Lock(m_InputMutex);
-				std::wstring ClearPreviewStr;
-				GetClearInputPreview(ClearPreviewStr);
-				std::wcout << ClearPreviewStr;
-				m_Input.clear();
-				m_InputNotifier.notify_all();
-			}
+
+			std::wcout.rdbuf(m_WCoutStreamBuf);
+			std::cout.rdbuf(m_CoutStreamBuf);
+
+			m_WCoutStreamBuf = nullptr;
+			m_CoutStreamBuf = nullptr;
+
+			std::lock_guard<std::mutex> Lock(m_IOMutex);
+			std::wstring InputRemove;
+			AddInputRemove(InputRemove);
+			Write(InputRemove);
 		}
 	}
 
-	void Console::InputThreadFunc()
+	void Console::SetInputPrefix(const std::wstring& Prefix)
+	{
+		std::lock_guard<std::mutex> Lock(m_IOMutex);
+		std::wstring InputPreviewUpdate;
+		AddInputRemove(InputPreviewUpdate);
+		m_InputPrefix = Prefix;
+		AddInputPreview(InputPreviewUpdate);
+		Write(InputPreviewUpdate);
+	}
+
+	void Console::SetInputPrefix(const std::string& Prefix)
+	{
+		SetInputPrefix(std::wstring(Prefix.begin(), Prefix.end()));
+	}
+
+	std::wstring Console::GetInputPrefix()
+	{
+		std::lock_guard<std::mutex> Lock(m_IOMutex);
+		return m_InputPrefix;
+	}
+
+	bool Console::HasInput()
+	{
+		std::lock_guard<std::mutex> Lock(m_IOMutex);
+		return !m_InputQueue.empty();
+	}
+
+	std::wstring Console::Input()
+	{
+		std::lock_guard<std::mutex> Lock(m_IOMutex);
+		std::wstring Input = m_InputQueue.front();
+		m_InputQueue.pop();
+		return Input;
+	}
+
+	bool Console::WaitInput()
+	{
+		if (m_InputEnabled)
+		{
+			std::unique_lock<std::mutex> Lock(m_IOMutex);
+			m_InputNotifier.wait(Lock, [&]() -> bool { return !m_InputQueue.empty() || !m_InputEnabled.load(); });
+			return m_InputEnabled;
+		}
+
+		return false;
+	}
+
+	void Console::Write(const std::wstring& Str)
+	{
+		if (m_WCoutStreamBuf != nullptr)
+		{
+			std::wcout.rdbuf(m_WCoutStreamBuf);
+		}
+		std::wcout << Str;
+		if (m_WCoutStreamBuf != nullptr)
+		{
+			std::wcout.rdbuf(&WCoutRedirect);
+		}
+	}
+
+	void Console::InputThread()
 	{
 		// Skip Input while it was disabled
 		while (_kbhit())
@@ -133,9 +200,9 @@ namespace DerGaijin
 				// Get Char without pressing Enter
 				int C = _getch();
 				{
-					std::lock_guard<std::mutex> Lock(m_InputMutex);
+					std::lock_guard<std::mutex> Lock(m_IOMutex);
 					std::wstring InputPreviewResult;
-					GetClearInputPreview(InputPreviewResult);
+					AddInputRemove(InputPreviewResult);
 					if (C == '\n' || C == '\r')	// If enter is pressed submit Input
 					{
 						m_InputQueue.push(m_Input);
@@ -154,7 +221,7 @@ namespace DerGaijin
 							m_CursorPos = m_CursorPos == 0 ? 0 : m_CursorPos - 1;
 						}
 					}
-					else if (C == -32)
+					else if (C == -32 || C == 224)
 					{
 						int P = _getch();
 						switch (P)
@@ -206,8 +273,8 @@ namespace DerGaijin
 						m_CursorPos++;
 					}
 
-					GetInputPreview(InputPreviewResult);
-					std::wcout << InputPreviewResult;
+					AddInputPreview(InputPreviewResult);
+					Write(InputPreviewResult);
 				}
 			}
 			else
@@ -218,7 +285,7 @@ namespace DerGaijin
 		}
 	}
 
-	size_t Console::ConsoleLineWidth()
+	size_t Console::MaxLineWidth()
 	{
 #if _WIN32 || _WIN64
 		HANDLE ConsoleHandle = GetStdHandle(STD_OUTPUT_HANDLE);
@@ -246,40 +313,52 @@ namespace DerGaijin
 		return Lines;
 	}
 
-	void Console::GetClearInputPreview(std::wstring& Result)
+	void Console::AddInputRemove(std::wstring& Result)
 	{
-		size_t ConsoleWidth = ConsoleLineWidth();
-		size_t Lines = LineCount(ConsoleWidth, m_InputPrefix.size() + m_Input.size());
-		size_t CurrLine = LineCount(ConsoleWidth, m_InputPrefix.size() + (m_CursorPos + 1));
+		size_t ConsoleWidth = MaxLineWidth();
+		size_t ColumnLines = LineCount(ConsoleWidth, m_Column);
+		size_t AbsColumn = m_Column - (ColumnLines * ConsoleWidth);
+		AbsColumn++;	// Fixes the first Column to skip one char?
+		size_t InputLines = LineCount(ConsoleWidth, m_InputPrefix.size() + m_Input.size());
+		size_t CursorLine = LineCount(ConsoleWidth, m_InputPrefix.size() + m_CursorPos, true);
 
 		// Move Cursor to last line
-		if (CurrLine < Lines)
+		if (CursorLine < InputLines)
 		{
-			for (size_t i = 0; i < Lines - CurrLine; i++)
-			{
-				Result += L"\033[B";
-			}
+			InputLines -= (InputLines - CursorLine);
 		}
 
-		// Create the Ansi erase String
-		Result += L"\x1b[0G\x1b[2K";
-		for (size_t i = 0; i < Lines; i++)
+		if (m_Column > 0)
 		{
-			Result += L"\033[A\x1b[0G\x1b[2K";
+			InputLines++;
 		}
+		if (InputLines > 0)
+		{
+			Result += L"\033[" + std::to_wstring(InputLines) + L"F";
+		}
+		Result += L"\033[" + std::to_wstring(AbsColumn) + L"G";
+		Result += L"\x1b[0J";
 	}
 
-	void Console::GetInputPreview(std::wstring& Result)
+	void Console::AddInputPreview(std::wstring& Result)
 	{
-		size_t ConsoleWidth = ConsoleLineWidth();
+		// Add New Line for Input if needed
+		if (m_Column > 0)
+		{
+			Result += L"\n";
+		}
+
+		// Add Input
+		Result += m_InputPrefix;
+		Result += m_Input;
+
+		size_t ConsoleWidth = MaxLineWidth();
 		size_t Lines = LineCount(ConsoleWidth, m_InputPrefix.size() + m_Input.size());
 		size_t CurrLine = LineCount(ConsoleWidth, m_InputPrefix.size() + (m_CursorPos + 1));
 
 		size_t Column = m_InputPrefix.size() + m_CursorPos + 1;
 		Column -= (CurrLine * ConsoleWidth);
 
-		Result += m_InputPrefix;
-		Result += m_Input;
 		if (Lines > CurrLine)
 		{
 			Result += L"\x1b[";
@@ -291,13 +370,3 @@ namespace DerGaijin
 		Result += L"G";
 	}
 }
-
-/*
-
-- Handle Tabs
-- Input History
-- Auto Completion
-- make it faster
-- Multi platform Support
-
-*/

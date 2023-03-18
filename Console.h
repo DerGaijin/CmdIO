@@ -16,9 +16,11 @@ namespace DerGaijin
 		static void Output(const std::string& Str);
 
 		static void EnableInput();
-		
+
+		static void DisableInput();
+
 		static void SetInputPrefix(const std::string& Prefix);
-		
+
 		static void SetInputPrefix(const std::wstring& Prefix);
 
 		static std::wstring GetInputPrefix();
@@ -28,7 +30,7 @@ namespace DerGaijin
 		static std::wstring Input();
 
 		static bool WaitInput();
-		
+
 		template<typename Rep, typename Period>
 		static bool WaitInputFor(const std::chrono::duration<Rep, Period>& Time)
 		{
@@ -43,7 +45,7 @@ namespace DerGaijin
 
 			return false;
 		}
-		
+
 		template<typename Clock, typename Dur>
 		static void WaitInputUntil(const std::chrono::time_point<Clock, Dur>& TimePoint)
 		{
@@ -59,24 +61,31 @@ namespace DerGaijin
 			return false;
 		}
 
-		static void DisableInput();
-
 	private:
-		static void InputThreadFunc();
+		static void Write(const std::wstring& Str);
 
-		static size_t ConsoleLineWidth();
+		static void InputThread();
+
+		static size_t MaxLineWidth();
 
 		static size_t LineCount(size_t LineWidth, size_t Width, bool Equal = false);
 
-		static void GetClearInputPreview(std::wstring& Result);
+		static void AddInputRemove(std::wstring& Result);
 
-		static void GetInputPreview(std::wstring& Result);
+		static void AddInputPreview(std::wstring& Result);
 
 	private:
+		static std::mutex m_IOMutex;
+
+		// Output
+		static size_t m_Column;
+		static std::wstreambuf* m_WCoutStreamBuf;
+		static std::streambuf* m_CoutStreamBuf;
+
+
+		// Input
 		static std::atomic<bool> m_InputEnabled;
 		static std::thread m_InputThread;
-
-		static std::mutex m_InputMutex;
 		static std::wstring m_InputPrefix;
 		static std::wstring m_Input;
 		static size_t m_CursorPos;
