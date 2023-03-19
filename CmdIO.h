@@ -6,31 +6,52 @@
 
 namespace DerGaijin
 {
-	class Console
+	class CmdIO
 	{
+		template<typename Char>
+		friend class ConsoleRedirect;
+
 	public:
-		Console() = delete;
+		enum class EMode
+		{
+			Line,
+			Char,
+		};
 
-		static void Output(const std::wstring& Str);
+	public:
+		CmdIO() = delete;
 
-		static void Output(const std::string& Str);
+		// Enables the Async Input and redirects the output streams
+		static void EnableInput(EMode Mode = EMode::Line);
 
-		static void EnableInput();
-
+		// Disables the Async Input and reset the output streams to default
 		static void DisableInput();
 
-		static void SetInputPrefix(const std::string& Prefix);
+		// Returns the Input Mode
+		static EMode GetMode();
 
-		static void SetInputPrefix(const std::wstring& Prefix);
 
-		static std::wstring GetInputPrefix();
+		// Sets the Input Prefix
+		static void SetPrefix(const std::wstring& Prefix);
 
+		// Returns the Input Prefix
+		static std::wstring GetPrefix();
+
+
+		// Returns true if a Input is ready
 		static bool HasInput();
 
+		// Returns the submitted Input or empty string if none was ready
 		static std::wstring Input();
 
+		// Returns the current Input
+		static std::wstring CurrentInput();
+
+
+		// Waits for a Input Submit
 		static bool WaitInput();
 
+		// Waits for a Input Submit for Time
 		template<typename Rep, typename Period>
 		static bool WaitInputFor(const std::chrono::duration<Rep, Period>& Time)
 		{
@@ -46,6 +67,7 @@ namespace DerGaijin
 			return false;
 		}
 
+		// Waits for a Input Submit until Timepoint
 		template<typename Clock, typename Dur>
 		static void WaitInputUntil(const std::chrono::time_point<Clock, Dur>& TimePoint)
 		{
@@ -62,9 +84,9 @@ namespace DerGaijin
 		}
 
 	private:
-		static void Write(const std::wstring& Str);
-
 		static void InputThread();
+
+		static void SubmitInput();
 
 		static size_t MaxLineWidth();
 
@@ -74,23 +96,35 @@ namespace DerGaijin
 
 		static void AddInputPreview(std::wstring& Result);
 
+		static void WriteOutput(const std::wstring& Output);
+
+		static void ProcessRedirectedOutput(const wchar_t* Str, size_t Count);
+
+		static void ProcessRedirectedOutput(const char* Str, size_t Count);
+
 	private:
-		static std::mutex m_IOMutex;
+		// Input Thread
+		static std::atomic<bool> m_InputEnabled;
+		static std::thread m_InputThread;
+		static EMode m_Mode;
+
+		// Input
+		static std::mutex m_InputMutex;
+		static std::wstring m_InputPrefix;
+		static std::wstring m_Input;
+
+		// Input Editing
+		static size_t m_CursorPos;
+		static bool m_Replace;
+		
+		// Input Queue
+		static std::queue<std::wstring> m_InputQueue;
+		static std::condition_variable m_InputNotifier;
 
 		// Output
 		static size_t m_Column;
 		static std::wstreambuf* m_WCoutStreamBuf;
 		static std::streambuf* m_CoutStreamBuf;
 
-
-		// Input
-		static std::atomic<bool> m_InputEnabled;
-		static std::thread m_InputThread;
-		static std::wstring m_InputPrefix;
-		static std::wstring m_Input;
-		static size_t m_CursorPos;
-		static bool m_Replace;
-		static std::queue<std::wstring> m_InputQueue;
-		static std::condition_variable m_InputNotifier;
 	};
 }

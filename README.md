@@ -1,3 +1,19 @@
+# DerGaijin - CmdIO
+
+Simple and easy to use asynchronous console input/output.
+
+## Features
+
+* Asynchronous I/O
+* Simple usage
+* Output streams redirected
+* Thread-safety
+* Cursor movement
+* Cross-platform
+
+## Example
+
+```cpp
 #include "CmdIO.h"
 using namespace DerGaijin;
 #include <iostream>
@@ -25,3 +41,5 @@ int main()
 	}
 	return 0;
 }
+
+```
