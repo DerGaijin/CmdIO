@@ -1,6 +1,9 @@
 # DerGaijin - CmdIO
 
-Simple and easy to use asynchronous console input/output.
+This library provides an interface for reading input asynchronous from the console.
+
+The library is implemented as a static class that provides static methods for enabling/disabling input, checking for input availability, and reading input.
+It uses a thread for capturing console input, and it supports two modes of input: line and character. In line mode, input is captured one line at a time, whereas in character mode, each keystroke is captured.
 
 ## Features
 
