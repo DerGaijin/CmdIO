@@ -9,6 +9,9 @@
 #undef max
 #elif __linux__
 #include <sys/ioctl.h>
+#elif __APPLE__
+#include <sys/ioctl.h>
+#include <unistd.h>
 #else
 #error Unsupported Platform
 #endif
@@ -49,56 +52,62 @@ namespace DerGaijin
 	ConsoleRedirect<wchar_t> WCoutRedirect;
 	ConsoleRedirect<char> CoutRedirect;
 
-	void CmdIO::EnableInput(EMode Mode /*= Mode::Line*/)
+	void CmdIO::EnableInput(EMode Mode /*= EMode::Line*/)
 	{
-		bool Expected = false;
-		if (m_InputEnabled.compare_exchange_weak(Expected, true))
+		// Try to atomically set m_InputEnabled to true if it's currently false
+		bool expected = false;
+		if (!m_InputEnabled.compare_exchange_weak(expected, true))
 		{
-			// Set Input Mode
-			m_Mode = Mode;
-
-			// Start Input Thread
-			m_InputThread = std::thread(&CmdIO::InputThread);
-
-			// Backup Output Streams
-			m_WCoutStreamBuf = std::wcout.rdbuf();
-			m_CoutStreamBuf = std::cout.rdbuf();
-
-			// Redirect Output Streams
-			std::wcout.rdbuf(&WCoutRedirect);
-			std::cout.rdbuf(&CoutRedirect);
-
-			// Print Preview Prefix
-			std::wstring InputEnabled;
-			AddInputPreview(InputEnabled);
-			WriteOutput(InputEnabled);
+			// Input is already enabled
+			return;
 		}
+
+		// Set Input Mode
+		m_Mode = Mode;
+
+		// Start Input Thread
+		m_InputThread = std::thread(&CmdIO::InputThread);
+
+		// Backup Output Streams
+		m_WCoutStreamBuf = std::wcout.rdbuf();
+		m_CoutStreamBuf = std::cout.rdbuf();
+
+		// Redirect Output Streams
+		std::wcout.rdbuf(&WCoutRedirect);
+		std::cout.rdbuf(&CoutRedirect);
+
+		// Print Preview Prefix
+		std::wstring InputEnabled;
+		AddInputPreview(InputEnabled);
+		WriteOutput(InputEnabled);
 	}
 
 	void CmdIO::DisableInput()
 	{
 		bool Expected = true;
-		if (m_InputEnabled.compare_exchange_weak(Expected, false))
+		if (!m_InputEnabled.compare_exchange_weak(Expected, false))
 		{
-			// Join Input Thread
-			if (m_InputThread.joinable())
-			{
-				m_InputThread.join();
-			}
-
-			// Reset Output Streams
-			std::wcout.rdbuf(m_WCoutStreamBuf);
-			std::cout.rdbuf(m_CoutStreamBuf);
-
-			// Clear Backup Output Streams
-			m_WCoutStreamBuf = nullptr;
-			m_CoutStreamBuf = nullptr;
-
-			// Remove Preview Prefix
-			std::wstring InputDisabled;
-			AddInputRemove(InputDisabled);
-			WriteOutput(InputDisabled);
+			return;
 		}
+
+		// Join Input Thread
+		if (m_InputThread.joinable())
+		{
+			m_InputThread.join();
+		}
+
+		// Reset Output Streams
+		std::wcout.rdbuf(m_WCoutStreamBuf);
+		std::cout.rdbuf(m_CoutStreamBuf);
+
+		// Clear Backup Output Streams
+		m_WCoutStreamBuf = nullptr;
+		m_CoutStreamBuf = nullptr;
+
+		// Remove Preview Prefix
+		std::wstring InputDisabled;
+		AddInputRemove(InputDisabled);
+		WriteOutput(InputDisabled);
 	}
 
 	CmdIO::EMode CmdIO::GetMode()
@@ -109,9 +118,12 @@ namespace DerGaijin
 	void CmdIO::SetPrefix(const std::wstring& Prefix)
 	{
 		std::lock_guard<std::mutex> Lock(m_InputMutex);
+		
 		std::wstring PrefixChange;
 		AddInputRemove(PrefixChange);
+		
 		m_InputPrefix = Prefix;
+		
 		AddInputPreview(PrefixChange);
 		WriteOutput(PrefixChange);
 	}
@@ -354,7 +366,7 @@ namespace DerGaijin
 		GetConsoleScreenBufferInfo(ConsoleHandle, &cbsi);
 
 		size_t LineWidth = cbsi.dwSize.X;
-#elif __linux__
+#elif __linux__ || __APPLE__
 		struct winsize w;
 		ioctl(STDOUT_FILENO, TIOCGWINSZ, &w);
 

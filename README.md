@@ -12,7 +12,7 @@ It uses a thread for capturing console input, and it supports two modes of input
 * Output streams redirected
 * Thread-safety
 * Cursor movement
-* Supported Platforms: Windows and Linux
+* Cross-platform
 
 ## Example
 
